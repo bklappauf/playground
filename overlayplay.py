@@ -7,16 +7,16 @@ from random import random
 
 # ETS imports
 import numpy as np
-
-# ETS imports
-from enable.api import ComponentEditor, BaseTool
-from traits.api import Instance, Float, Enum, Int, Bool
-from traitsui.api import ModelView, View, Item, ToolBar
+from traits.api import Instance, HasTraits, Array, Property, Float, Enum, Dict,\
+                                Str, Int, Bool
+                #, on_trait_change
+from traitsui.api import ModelView, View, Item, ToolBar# Group,
 from traitsui.menu import Action, OKCancelButtons, Menu, MenuBar,StandardMenuBar
-from chaco.api import Plot, ArrayPlotData, jet, PlotAxis, create_scatter_plot,\
-                        create_line_plot, Legend
-from chaco.tools.api import PanTool, ZoomTool, LegendTool
+from enable.api import ComponentEditor, BaseTool
+from chaco.api import Plot, ArrayPlotData, OverlayPlotContainer, jet, PlotAxis,\
+                    add_default_axes, create_scatter_plot
 from pyface.api import ImageResource
+from chaco.tools.api import PanTool, ZoomTool
 
 # Local imports
 from twdb_datasource import WaterDataSource
@@ -29,23 +29,16 @@ recalc = Action(name = "Recalculate",
                 action = "do_recalc",
                 toolip = "Recalculate the results",
                 image = ImageResource("recalc.png"))
-
-
-################################################################################
-# Custom Tools
-################################################################################
-
+##########################################################
 
 class TraceTool(BaseTool):
-    ''' Allows mouse update of impoundment boundary trace
-
-    '''
-
     event_state = Enum('normal', 'edit')
     last_index = Int(np.nan)
     last_y = Float(np.nan)
     mouse_down = Bool(False)
-    PROXIMITY = Int(100)
+    #def _event_state_default(self):
+    #    return 'normal'
+    #def _last_index_default(self):
 
     def switch(self):
         print self.event_state,'to',
@@ -93,8 +86,6 @@ class TraceTool(BaseTool):
         return np.array(indices), np.array(ys)
 
     def edit_mouse_move(self,event):
-        ''' continuously change the impound line value to the current mouse pos
-        '''
         data = self.component.data
         newx,newy = self.component.map_data( (event.x,event.y))
         print newx,newy
@@ -113,54 +104,15 @@ class TraceTool(BaseTool):
             self.last_index = current_index
             self.last_y = newy
 
-    def normal_left_down(self, event):
-        print '\n ############  nleft_down'
-        # don't know how to access this plot by name.
-        corepts = self.component.components[2]
-        print corepts
-        corexy = corepts.map_screen((0,-50))
-        pxy = self.component.map_screen((0,-50))
-        print corexy, pxy
-        print corexy-pxy
-        (mx,my) = (event.x,event.y)
-        xdata,ydata = corepts.index.get_data(), corepts.value.get_data()
-        xydata = np.vstack((xdata,ydata))
-        screen = corepts.map_screen( xydata.T)
-        diff = screen-(mx,my)
-        dist_array = np.sum(diff**2, axis=1)
-        index = np.argmin(dist_array)
-        x,y = xdata[index], ydata[index]
-        print index,screen, (mx,my), [x,y]
-        vline = self.component.components[3]
-        data = vline.value.get_data()
-        vline.value.set_data([x for value in data])
-#        #(mx,my) = corepts.map_data((event.x,event.y))
-#        nearest = corepts.get_closest_point((mx,my), self.PROXIMITY)
-#        print nearest
-#        print corepts.map_data((event.x,event.y))
-#        if nearest:
-#            [x,y,d] = nearest
-#            newx,newy = corepts.map_data( (x, y))
-#            print (event.x,event.y), [x,y],newx,newy
-#            vline = self.component.components[3]
-#            print vline
-#            data = vline.value.get_data()
-#            print data
-#            vline.value.set_data([newx for value in data])
-#
-#
-        #xdata,ydata = self.data_xy
-        #xydata = vstack((xdata,ydata))
-        #screen = self.component.map_screen( xydata.T)
-        #diff = screen-(event.x,event.y)
-        #dist_array = sum(diff**2, axis=1)
-        #index = argmin(dist_array)
+
+
 
 
 
 class AppWindow(ModelView):
     model = Instance(WaterDataSource)
     plots = Instance(Plot)
+    plotd = Dict
     drawstyle = Enum('Pt_by_Pt', 'Continuous')
     traits_view = View(
                     Item('plots',editor=ComponentEditor(),
@@ -199,45 +151,57 @@ class AppWindow(ModelView):
     def _plots_default(self):
         plotdata = self.get_data_sets()
         plots = Plot(plotdata)
-        plotsDict = {}
-        # plot background sonar image and impound lines
+
+        plotd = plotdata.arrays
         xbounds = self.model.survey_rng_m
         ybounds = self.model.depth_m
         plots.img_plot("sonarimg", colormap=jet,
                         xbounds=xbounds, ybounds=ybounds)
-        ip = plots.plot(('impound1_X','impound1_Y'), type='line', marker='square')
-        plotsDict['Impoundment line'] = ip
-        plots.x_axis.title = 'Distance along survey line (m)'
-        plots.y_axis.title = 'Depth (m)'
-
-        # add core samples as scatter with separate y-axis
-        corex = plotdata.get_data('coreX')
-        corey = plotdata.get_data('coreY')
-        scatter = create_scatter_plot((corex,corey), marker='diamond',
-                                       color='red' )
-        scatter.index_range = plots.index_range
+        plots.plot(('impound1_X','impound1_Y'), type='line', marker='square')
+        ##---------------------------------------------------------------------
+        # Plot core samples on separate vert axis
+        #xbounds#---------------------------------------------------------------------
+        # method 0
+        #   set plots.y_axis.orientation to 'right' but then true for all
+        ##---------------------------------------------------------------------
+        ##---------------------------------------------------------------------
+        # method 1  -  works
+        #   Makes scatter plot object but with no Axis i think.
+        #   Intended to be added to Plot or container.
+        #   This seems to work by rescaling the scatter axis to the screen size
+        #   of the Plot it was added to
+        ##---------------------------------------------------------------------
+        scatter = create_scatter_plot((plotd['coreX'],plotd['coreY']), marker='diamond',
+                                       color='red')
         axis = PlotAxis(scatter, orientation='right')
-        axis.title = 'Core sample dist from survey line (m)'
         scatter.underlays.append(axis)
         plots.add(scatter)
 
-        vals1 = [0 for x in corey]
-        vline = create_line_plot((corey,vals1), color='blue', orientation='v')
-        #vline.index_range = scatter.index_range
-        vline.value_range = scatter.index_range
-        plots.add(vline)
-
-        # Add Legend
-        legend = Legend(component=plots, padding=10, align="ur")
-        legend.tools.append(LegendTool(legend, drag_button="right"))
-        legend.plots = plotsDict
-        plots.overlays.append(legend)
-
-        # Add tools
+        ##---------------------------------------------------------------------
+        # Method 2
+        # Try to modify a scatter plot already in the Plot object by adding axis
+        #
+        ##---------------------------------------------------------------------
+        #scatter = plots.plot(('coreX','coreY'), type='scatter', marker='diamond',
+        #       color='red')
+        #scatterc = Plot(plotdata)
+        #scatter = scatterc.plot(('coreX','coreY'), type='scatter', marker='diamond',
+        #               color='red')
+            #scatter.y_axis.orientation = 'right'
+#        plots.y_axis.orientation = 'right'
+        #scatter = create_scatter_plot((plotd['coreX'],plotd['coreY']), marker='diamond',
+        #                                color='red')
+        #scatter.index_range = plots.index_range
+        #scatter.range2d = plots.range2d
+        #left, bottom = add_default_axes(scatter)
+        #plots.add(scatter)
+        #axis = PlotAxis(scatter, orientation = 'right')
+        #scatter.underlays.append(axis)
+        #left.orientation = 'right'
+        print 'scatter is ',scatter
         plots.tools.append(TraceTool(plots))
         plots.tools.append(PanTool(plots))
         plots.tools.append(ZoomTool(plots))
-
         return plots
 
 
